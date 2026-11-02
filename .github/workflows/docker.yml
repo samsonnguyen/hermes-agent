@@ -71,6 +71,7 @@ jobs:
   # the parent stable-release workflow, which passes the candidate commit.
   mode:
     name: Resolve release phase
+    if: github.repository == 'NousResearch/hermes-agent'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
@@ -764,7 +765,7 @@ jobs:
   # publisher turns this red instead of letting the phase go green.
   release-phase-gate:
     name: Docker phase requirements met
-    if: always() && inputs.release-phase != ''
+    if: always() && github.repository == 'NousResearch/hermes-agent' && inputs.release-phase != ''
     needs: [mode, build, release-publish, release-publish-manifest]
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5

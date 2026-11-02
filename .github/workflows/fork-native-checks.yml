@@ -1,0 +1,61 @@
+name: Fork native CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  HERMES_HOME: ${{ runner.temp }}/hermes-home
+
+jobs:
+  native-checks:
+    name: Workflow native checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up locked Python and test dependencies
+        uses: ./.github/actions/setup-pm
+        with:
+          extras: '["discord"]'
+          test-environment: 'true'
+          prune-python-cache: true
+
+      - name: Run dynamic CI and native Kanban suites
+        run: |
+          set -euo pipefail
+          mapfile -t ci_files < <(find tests/ci -name 'test_*.py' -print | sort)
+          scripts/run_tests.sh -j 4 "${ci_files[@]}" \
+            tests/hermes_cli/test_kanban_db.py \
+            tests/hermes_cli/test_kanban_review_lifecycle.py \
+            tests/hermes_cli/test_kanban_review_lifecycle_complete.py \
+            tests/hermes_cli/test_kanban_review_surfaces.py \
+            tests/hermes_cli/test_kanban_host_cap.py \
+            tests/tools/test_kanban_tools.py \
+            tests/agent/test_kanban_stop.py
+
+      - name: Run strict real-process Kanban lifecycle E2E
+        env:
+          HERMES_E2E_STRICT_ACCEPTANCE: '1'
+          HERMES_TEST_FILE_RETRIES: '0'
+          HERMES_TEST_FILE_TIMEOUT: '600'
+          OPENROUTER_API_KEY: ''
+          OPENAI_API_KEY: ''
+          NOUS_API_KEY: ''
+        run: scripts/run_tests.sh -j 1 tests/e2e/core/kanban/test_kanban_rate_limit_review.py
+
+      - name: Check the checkout is clean
+        uses: ./.github/actions/check-clean-worktree

@@ -3353,8 +3353,8 @@ def request_review(
                    SET status        = 'review',
                        claim_lock    = NULL,
                        claim_expires = NULL,
-                       worker_pid    = NULL
-                """ + assignee_sql + """
+                       worker_pid    = NULL, last_failure_error = NULL
+                       """ + assignee_sql + """
                  WHERE id = ?
                    AND status IN ('running', 'ready')
                 """ + run_guard,

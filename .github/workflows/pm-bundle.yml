@@ -57,6 +57,7 @@ concurrency:
 jobs:
   bundle:
     name: bundle ${{ matrix.target.label }}
+    if: github.repository == 'NousResearch/hermes-agent'
     runs-on: ${{ matrix.target.runner }}
     # Leave time for setup, cache saves and smoke tests around the wheel build.
     timeout-minutes: 180
