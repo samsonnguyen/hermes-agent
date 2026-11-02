@@ -30,8 +30,9 @@ from typing import Any
 import pytest
 
 from tests.e2e.core._pending_fixes import known_gate
-from tests.e2e.core.kanban._helpers import Board
+from tests.e2e.core.kanban._helpers import Board, REPO
 from tests.fakes.fake_llm_provider import Error, FakeLLMServer, Text, ToolCall
+from tests.gateway.fixtures.local_recovery_probe import daemon
 
 pytestmark = [
     pytest.mark.skipif(sys.platform != "linux", reason="worker liveness reads /proc"),
@@ -173,8 +174,17 @@ def _flow(root: Path, rate_limited_attempts: int) -> Any:
         board = Board(root, srv.base_url)
         _seed_review_skill(board)
         tid = board.create(f"rate-limit review flow ({rate_limited_attempts} x 429)")
+        env = board.env()
+        env.update({
+            "HERMES_GATEWAY_LOCK_DIR": str(board.root / "gateway-locks"),
+            "PYTHONUNBUFFERED": "1",
+        })
         try:
-            ticks = drive(board, tid, model)
+            with daemon(REPO, board.hermes_home, env, barrier=False) as (_proc, desc):
+                assert desc["served_profiles"] == [{
+                    "profile_id": str(board.hermes_home), "home": str(board.hermes_home),
+                }], desc
+                ticks = drive(board, tid, model)
         finally:
             board.kill_workers()
         return Flow(board, tid, model, ticks)
@@ -197,6 +207,7 @@ def test_rate_limited_attempt_is_billed_once_and_requeued_without_a_failure(rate
     # Billing contract of the 429 attempt: booked neutral, never counted against the breaker.
     assert runs[0]["outcome"] == "rate_limited", diag
     assert runs[1]["outcome"] == "review_requested", diag
+    assert b.task(tid)["last_failure_error"] is None, diag
     rl_events = b.events(tid, "rate_limited")
     assert len(rl_events) == 1 and rl_events[0]["payload"]["exit_code"] == RATE_LIMIT_EXIT_CODE, diag
     assert rl_events[0]["run_id"] == runs[0]["id"], diag

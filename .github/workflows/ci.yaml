@@ -70,6 +70,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   detect:
     name: Detect affected areas
+    if: github.repository == 'NousResearch/hermes-agent'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 3
     outputs:
@@ -426,6 +427,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   all-checks-pass:
     name: All required checks pass (v2)
+    if: always() && github.repository == 'NousResearch/hermes-agent'
     needs:
       - detect
       - tests
@@ -461,7 +463,6 @@ jobs:
       # its own check. It was never required here, because it is too slow
       # to block a merge. A separate run also stops it from holding this
       # run open. That is what blocked ``gh run rerun``.
-    if: always()
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     outputs:
@@ -499,7 +500,7 @@ jobs:
       contents: read
       actions: read # download completed jobs' cache transfer logs
     needs: [all-checks-pass]
-    if: always()
+    if: always() && github.repository == 'NousResearch/hermes-agent'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
