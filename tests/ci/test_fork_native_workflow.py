@@ -30,7 +30,10 @@ def test_fork_native_workflow_runs_bounded_read_only_dynamic_and_strict_lanes() 
     assert job["timeout-minutes"] <= 30
     assert workflow["concurrency"]["group"].startswith("fork-native-")
     assert workflow["concurrency"]["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
-    assert workflow["env"]["HERMES_HOME"]
+    assert "env" not in workflow
+    home_step = next(step for step in job["steps"] if step.get("name") == "Set isolated Hermes home")
+    assert "HERMES_HOME=$RUNNER_TEMP/hermes-home" in home_step["run"]
+    assert "$GITHUB_ENV" in home_step["run"]
 
     actions = [step["uses"] for step in job["steps"] if "uses" in step]
     assert "actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a" in actions

@@ -13,9 +13,6 @@ concurrency:
   group: fork-native-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  HERMES_HOME: ${{ runner.temp }}/hermes-home
-
 jobs:
   native-checks:
     name: Workflow native checks
@@ -26,6 +23,9 @@ jobs:
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Set isolated Hermes home
+        run: echo "HERMES_HOME=$RUNNER_TEMP/hermes-home" >> "$GITHUB_ENV"
 
       - name: Set up locked Python and test dependencies
         uses: ./.github/actions/setup-pm
