@@ -44,7 +44,7 @@ def test_review_tools_redact_handoff_and_route_changes(
     requested = json.loads(
         tools._handle_request_review({
             "summary": f"Ready; temporary token was {secret}",
-            "metadata": {"token": secret, "tests_run": 7},
+            "metadata": {"token": secret, "tests_run": 7, "head_sha": "c" * 40},
             "reviewer": "reviewer",
         })
     )
@@ -68,6 +68,8 @@ def test_review_tools_redact_handoff_and_route_changes(
     changed = json.loads(
         tools._handle_request_changes({
             "reason": f"Add a boundary assertion; leaked={change_secret}",
+            "rejected_head_sha": "c" * 40,
+            "findings": ["tests/test_export.py: cover the boundary"],
         })
     )
     assert changed["ok"] is True
@@ -88,6 +90,8 @@ def test_review_tools_redact_handoff_and_route_changes(
         assert event.payload["reason"] != (
             "Add a boundary assertion; leaked=" + change_secret
         )
+        assert event.payload["rejected_head_sha"] == "c" * 40
+        assert event.payload["findings"] == ["tests/test_export.py: cover the boundary"]
 
 
 def test_review_tools_are_gated_and_visible_to_kanban_workers(

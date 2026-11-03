@@ -2007,7 +2007,7 @@ def _latest_event(
     conn: sqlite3.Connection, task_id: str, kind: str, run_id: Optional[int] = None,
 ) -> Optional[sqlite3.Row]:
     """Newest ``task_events`` row of ``kind`` (optionally scoped to one run)."""
-    sql = "SELECT payload FROM task_events WHERE task_id = ? AND kind = ?"
+    sql = "SELECT payload, run_id FROM task_events WHERE task_id = ? AND kind = ?"
     params: tuple[Any, ...] = (task_id, kind)
     if run_id is not None:
         sql += " AND run_id = ?"
@@ -3341,6 +3341,22 @@ def request_review(
                 implementer = arow["profile"] if arow else None
             if implementer is None and trow["assignee"] != reviewer:
                 implementer = trow["assignee"]
+            prior_changes = conn.execute(
+                "SELECT id FROM task_runs WHERE task_id = ? AND outcome = 'changes_requested' "
+                "ORDER BY id DESC LIMIT 1", (task_id,),
+            ).fetchone()
+            prior_event = _latest_event(conn, task_id, "changes_requested", prior_changes["id"]) if prior_changes else None
+            rejected_head = _json_dict(_row_get(prior_event, "payload")).get("rejected_head_sha")
+            submitted_head = metadata.get("head_sha") if isinstance(metadata, dict) else None
+            if submitted_head is not None:
+                submitted_head = str(submitted_head).strip().lower()
+                if not re.fullmatch(r"[0-9a-f]{40}", submitted_head):
+                    return _ret(False, "metadata.head_sha must be a full 40-character hexadecimal commit SHA")
+            if rejected_head:
+                if submitted_head is None:
+                    return _ret(False, "re-review must include the pushed metadata.head_sha")
+                if rejected_head == submitted_head:
+                    return _ret(False, "the pushed head_sha is unchanged from the rejected review head")
             assignee_sql = ", assignee = ?" if reviewer is not None else ""
             run_guard = "" if expected_run_id is None else " AND current_run_id = ?"
             params: tuple[Any, ...] = (
@@ -3410,73 +3426,17 @@ def _nonblank_str(value: Any) -> Optional[str]:
 
 
 def request_changes(
-    conn: sqlite3.Connection, task_id: str, *, reason: str, expected_run_id: Optional[int] = None,
+    conn: sqlite3.Connection, task_id: str, *, reason: str,
+    rejected_head_sha: Optional[str] = None, findings: Optional[list[str]] = None,
+    expected_run_id: Optional[int] = None,
 ) -> tuple[bool, Optional[str]]:
-    """Close an active reviewer run (claimed from ``review``) and hand the task
-    back to the implementer from the latest ``review_requested`` event, parent
-    gating reapplied. Returns ``(ok, implementer | reason)``."""
-    reason = str(redact_review_value(reason or "")).strip()
-    if not reason:
-        return False, "reason is required"
+    """Return a review verdict through the dedicated atomic lifecycle sibling."""
+    from hermes_cli.kanban_db_review import request_changes as _request_changes
 
-    with write_txn(conn):
-        task_row = conn.execute(
-            "SELECT status, assignee, current_run_id FROM tasks WHERE id = ?", (task_id,),
-        ).fetchone()
-        if task_row is None:
-            return False, "task not found"
-        current_run_id = task_row["current_run_id"]
-        if task_row["status"] != "running" or current_run_id is None:
-            return False, "task is not in an active review run"
-        if expected_run_id is not None and int(current_run_id) != int(expected_run_id):
-            return False, "run_id mismatch"
-
-        claimed_event = _latest_event(conn, task_id, "claimed", current_run_id)
-        claimed_payload = _json_dict(_row_get(claimed_event, "payload"))
-        if claimed_payload.get("source_status") != "review":
-            return False, "active run was not claimed from review"
-
-        requested_event = _latest_event(conn, task_id, "review_requested")
-        if requested_event is None:
-            return False, "no prior review_requested event"
-        implementer = _nonblank_str(_json_dict(requested_event["payload"]).get("implementer"))
-        if implementer is None:
-            return False, "review handoff has no valid implementer provenance"
-        reviewer = _canonical_assignee(_nonblank_str(task_row["assignee"]))
-
-        new_status = _landing_status_after_parents(conn, task_id)
-        # consecutive_failures deliberately PRESERVED: a review transition is
-        # not evidence the pathology cleared; only complete_task resets it.
-        cur = conn.execute(
-            """
-            UPDATE tasks
-               SET status = ?,
-                   assignee = COALESCE(?, assignee),
-                   claim_lock = NULL,
-                   claim_expires = NULL,
-                   worker_pid = NULL, worker_started_at = NULL
-             WHERE id = ? AND status = 'running' AND current_run_id = ?
-            """,
-            (new_status, implementer, task_id, int(current_run_id)),
-        )
-        if cur.rowcount != 1:
-            return False, "task changed during review handoff"
-        run_id = _end_run(
-            conn, task_id, outcome="changes_requested", status=new_status, summary=reason,
-        )
-        _append_event(
-            conn,
-            task_id,
-            "changes_requested",
-            {
-                "reason": reason,
-                "implementer": implementer,
-                "reviewer": reviewer,
-                "status": new_status,
-            },
-            run_id=run_id,
-        )
-    return True, implementer
+    return _request_changes(
+        conn, task_id, reason=reason, rejected_head_sha=rejected_head_sha,
+        findings=findings, expected_run_id=expected_run_id,
+    )
 
 
 def promote_task(
