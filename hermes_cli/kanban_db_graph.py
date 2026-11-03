@@ -5,6 +5,15 @@ import sqlite3
 import time
 from typing import Any, Optional
 
+
+def validate_execution_mode(value: str) -> str:
+    """Validate the durable task execution owner."""
+    allowed = {"worker", "coordinator_managed"}
+    if value not in allowed:
+        raise ValueError(f"execution_mode must be one of {sorted(allowed)}")
+    return value
+
+
 def inherit_creator_origin(
     conn: sqlite3.Connection, task_id: str, creator_task_id: Optional[str], *,
     created_at: int,

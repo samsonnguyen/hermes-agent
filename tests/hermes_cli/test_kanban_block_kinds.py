@@ -20,6 +20,7 @@ forever. The fix gives ``block_task`` a typed ``kind`` and a persistent
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import pytest
@@ -148,6 +149,63 @@ def test_dependency_block_with_terminal_parents_parks_then_escalates(
         assert kb.get_task(conn, child).status == "triage"
         loop = [e for e in kb.list_events(conn, child) if e.kind == "block_loop_detected"][-1].payload
         assert loop["recurrences"] == kb.BLOCK_RECURRENCE_LIMIT
+
+
+def test_coordinator_managed_task_is_not_spawned_by_worker_dispatch(
+    kanban_home: Path, all_assignees_spawnable,
+) -> None:
+    """Canonical coordination work remains durable without a fake worker claim."""
+    spawns: list[str] = []
+    with kbc.connect() as conn:
+        parent = kb.create_task(conn, title="synthetic parent", assignee="worker")
+        with kb.write_txn(conn):
+            conn.execute("UPDATE tasks SET status='done' WHERE id=?", (parent,))
+        task_id = kb.create_task(
+            conn, title="synthetic coordinator task", assignee="worker", parents=[parent],
+            execution_mode="coordinator_managed",
+        )
+        result = kbd.dispatch_once(conn, spawn_fn=lambda task, *_: spawns.append(task.id) or 4242)
+        task = kb.get_task(conn, task_id)
+        assert task.status == "ready"
+        assert task.execution_mode == "coordinator_managed"
+        assert task_id not in spawns
+        assert task_id not in [item[0] for item in result.spawned]
+        assert not [event for event in kb.list_events(conn, task_id)
+                    if event.kind in {"block_loop_detected", "respawn_guarded"}]
+
+
+def test_dependent_task_waits_without_events_then_spawns_once_after_parent_done(
+    kanban_home: Path, all_assignees_spawnable,
+) -> None:
+    """D1→D4 stays dormant, then receives one normal claim after D1 completes."""
+    spawns: list[str] = []
+    with kbc.connect() as conn:
+        parent = kb.create_task(conn, title="synthetic D1", assignee="worker")
+        child = kb.create_task(conn, title="synthetic D4", assignee="worker", parents=[parent])
+
+        def fake_spawn(task, *_args, **_kwargs):
+            spawns.append(task.id)
+            return os.getpid()
+
+        waiting = kbd.dispatch_once(conn, spawn_fn=fake_spawn)
+        assert parent in spawns
+        assert child not in spawns
+        assert child not in [item[0] for item in waiting.spawned]
+        assert kb.get_task(conn, child).status == "todo"
+        events = [event.kind for event in kb.list_events(conn, child)]
+        assert "block_loop_detected" not in events
+        assert "respawn_guarded" not in events
+
+        parent_task = kb.get_task(conn, parent)
+        assert parent_task.status == "running"
+        assert kb.complete_task(
+            conn, parent, result="synthetic completion", expected_run_id=parent_task.current_run_id,
+        )
+        eligible = kbd.dispatch_once(conn, spawn_fn=fake_spawn)
+        assert spawns.count(child) == 1
+        assert child in [item[0] for item in eligible.spawned]
+        kbd.dispatch_once(conn, spawn_fn=fake_spawn)
+        assert spawns.count(child) == 1
 
 
 def test_dependency_block_with_open_parent_stays_parked_across_dispatch_tick(
