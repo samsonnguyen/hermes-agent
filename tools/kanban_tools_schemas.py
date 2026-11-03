@@ -468,6 +468,15 @@ KANBAN_CREATE_SCHEMA = _schema(
                 "'running', which preserves the usual dispatch path."
             ),
         },
+        "execution_mode": {
+            "type": "string",
+            "enum": ["worker", "coordinator_managed"],
+            "description": (
+                "Execution owner; defaults to worker dispatch. Use "
+                "coordinator_managed only for explicitly authorized durable "
+                "orchestration tasks, which are never spawned as workers."
+            ),
+        },
         "skills": {
             "type": "array",
             "items": {"type": "string"},

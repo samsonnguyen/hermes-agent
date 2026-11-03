@@ -2294,10 +2294,10 @@ def _tick_spawn_budget(
 
 
 def _lane_rows(conn: sqlite3.Connection, status: str) -> list[sqlite3.Row]:
-    """Unclaimed rows of one lane in dispatch order."""
+    """Unclaimed worker-dispatch rows of one lane in dispatch order."""
     return conn.execute(
         "SELECT id, assignee FROM tasks "
-        f"WHERE status = '{status}' AND claim_lock IS NULL "
+        f"WHERE status = '{status}' AND claim_lock IS NULL AND COALESCE(execution_mode, 'worker') = 'worker' "
         "ORDER BY priority DESC, created_at ASC"
     ).fetchall()
 
