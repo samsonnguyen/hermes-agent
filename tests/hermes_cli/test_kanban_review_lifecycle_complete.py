@@ -70,6 +70,66 @@ def _claimed_review(
     return task_id, review
 
 
+def test_structured_review_verdict_is_head_bound_and_countable(conn):
+    task_id, review = _claimed_review(conn, "Head-bound review verdict")
+    head_sha = "a" * 40
+    run_id = review.current_run_id
+    assert run_id is not None
+
+    record = kb.record_review_verdict(
+        conn,
+        task_id,
+        outcome="APPROVED",
+        head_sha=head_sha,
+        reviewer="reviewer",
+        findings=[],
+        expected_run_id=run_id,
+    )
+
+    assert record is True
+    reviews = kb.list_review_verdicts(conn, task_id)
+    assert len(reviews) == 1
+    assert reviews[0]["outcome"] == "APPROVED"
+    assert reviews[0]["head_sha"] == head_sha
+    assert reviews[0]["reviewer"] == "reviewer"
+    assert reviews[0]["run_id"] == review.current_run_id
+    assert reviews[0]["findings"] == []
+    # Retrying the identical submission is idempotent; a changed verdict for
+    # the same immutable run/head cannot overwrite the original attestation.
+    assert kb.record_review_verdict(
+        conn, task_id, outcome="APPROVED", head_sha=head_sha, reviewer="reviewer",
+        findings=[], expected_run_id=review.current_run_id,
+    )
+    assert not kb.record_review_verdict(
+        conn, task_id, outcome="CHANGES_REQUESTED", head_sha=head_sha, reviewer="reviewer",
+        findings=[{"code": "R1", "message": "synthetic finding"}],
+        expected_run_id=review.current_run_id,
+    )
+    assert len(kb.list_review_verdicts(conn, task_id)) == 1
+
+
+@pytest.mark.parametrize("head_sha", ["a" * 39, "a" * 41, "g" * 40])
+def test_structured_review_rejects_non_full_git_sha(conn, head_sha):
+    task_id, review = _claimed_review(conn, "Reject malformed head")
+    assert not kb.record_review_verdict(
+        conn, task_id, outcome="APPROVED", head_sha=head_sha, reviewer="reviewer",
+        findings=[], expected_run_id=review.current_run_id,
+    )
+    assert kb.list_review_verdicts(conn, task_id) == []
+
+
+def test_structured_review_rejects_stale_run(conn):
+    task_id, review = _claimed_review(conn, "Reject stale review run")
+    assert kb.request_changes(
+        conn, task_id, reason="Synthetic requested change.", expected_run_id=review.current_run_id,
+    ) == (True, "builder")
+    assert not kb.record_review_verdict(
+        conn, task_id, outcome="APPROVED", head_sha="b" * 40, reviewer="reviewer",
+        findings=[], expected_run_id=review.current_run_id,
+    )
+    assert kb.list_review_verdicts(conn, task_id) == []
+
+
 def test_same_card_review_supports_changes_and_approval_without_block_loop(conn):
     task_id = kb.create_task(conn, title="Implement guarded export", assignee="builder")
     implementation = kb.claim_task(conn, task_id, claimer="builder:1")

@@ -51,6 +51,15 @@ Fixes #
 - [ ] I've added tests for my changes (required for bug fixes, strongly encouraged for features)
 - [ ] I've tested on my platform: <!-- e.g. Ubuntu 24.04, macOS 15.2, Windows 11 -->
 
+### Structured Review
+
+<!-- Every review-ready PR needs a structured verdict; comment-only feedback is discussion, not approval. -->
+
+- [ ] Reviewer identity: <!-- GitHub username / native reviewer profile -->
+- [ ] Exact reviewed head SHA: <!-- full 40-character commit SHA -->
+- [ ] Structured outcome recorded as `APPROVED`, `CHANGES_REQUESTED`, or `AWAITING_HUMAN`
+- [ ] `AWAITING_HUMAN` means the Samson gate is still outstanding; do not report formal approval
+
 ### Documentation & Housekeeping
 
 <!-- Check all that apply. It's OK to check "N/A" if a category doesn't apply to your change. -->
