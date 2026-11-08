@@ -45,6 +45,7 @@ def _claimed_review(
     *,
     ttl_seconds: int | None = None,
     max_runtime_seconds: int | None = None,
+    head_sha: str | None = None,
 ):
     task_id = kb.create_task(
         conn,
@@ -59,6 +60,7 @@ def _claimed_review(
         task_id,
         summary="ready for independent review",
         reviewer="reviewer",
+        metadata={"head_sha": head_sha} if head_sha is not None else None,
         expected_run_id=implementation.current_run_id,
     )
     review = kb.claim_review_task(
@@ -71,8 +73,8 @@ def _claimed_review(
 
 
 def test_structured_review_verdict_is_head_bound_and_countable(conn):
-    task_id, review = _claimed_review(conn, "Head-bound review verdict")
     head_sha = "a" * 40
+    task_id, review = _claimed_review(conn, "Head-bound review verdict", head_sha=head_sha)
     run_id = review.current_run_id
     assert run_id is not None
 
@@ -123,6 +125,33 @@ def test_structured_review_rejects_stale_run(conn):
     assert kb.request_changes(
         conn, task_id, reason="Synthetic requested change.", expected_run_id=review.current_run_id,
     ) == (True, "builder")
+    assert review.current_run_id is not None
+    assert not kb.record_review_verdict(
+        conn, task_id, outcome="APPROVED", head_sha="b" * 40, reviewer="reviewer",
+        findings=[], expected_run_id=review.current_run_id,
+    )
+    assert kb.list_review_verdicts(conn, task_id) == []
+
+
+def test_structured_review_rejects_approval_from_implementation_run(conn):
+    task_id = kb.create_task(conn, title="Reject self approval", assignee="builder")
+    implementation = kb.claim_task(conn, task_id, claimer="builder:self")
+    assert implementation is not None
+    assert implementation.current_run_id is not None
+
+    assert not kb.record_review_verdict(
+        conn, task_id, outcome="APPROVED", head_sha="a" * 40, reviewer="builder",
+        findings=[], expected_run_id=implementation.current_run_id,
+    )
+    assert kb.list_review_verdicts(conn, task_id) == []
+
+
+def test_structured_review_rejects_head_not_in_review_handoff(conn):
+    task_id, review = _claimed_review(
+        conn, "Reject caller-selected review head", head_sha="a" * 40,
+    )
+    assert review.current_run_id is not None
+
     assert not kb.record_review_verdict(
         conn, task_id, outcome="APPROVED", head_sha="b" * 40, reviewer="reviewer",
         findings=[], expected_run_id=review.current_run_id,

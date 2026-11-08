@@ -283,6 +283,16 @@ KANBAN_REQUEST_CHANGES_SCHEMA = _schema(
                 "Specific, actionable changes the implementer must make "
                 "before requesting another review."
         )),
+        "rejected_head_sha": _prop("string", (
+                "Optional full 40-character commit SHA that was reviewed. "
+                "When supplied, findings are required and the verdict is bound "
+                "to this exact review head."
+        )),
+        "findings": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Actionable reviewer findings for the rejected head.",
+        },
     },
     ["reason"],
 )

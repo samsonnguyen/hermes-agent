@@ -104,6 +104,36 @@ def _assignee_profile_home(assignee: str | None) -> str | None:
         raise _GateAuthError(f"assignee profile {assignee!r} cannot be resolved") from None
 
 
+def verify_published_head(contract: str, published_pr: str | None, head_sha: str,
+                         assignee: str | None = None) -> bool:
+    """Verify GitHub currently publishes ``head_sha`` for this task's exact PR.
+
+    A caller-supplied SHA is only a claim; the PR's live head and URL are the
+    publication authority. Re-read REST after GraphQL to reject a head that
+    moved during verification.
+    """
+    declared = _PR.fullmatch(contract)
+    match = _PR.fullmatch(published_pr or "")
+    if not match or (declared and published_pr != contract):
+        return False
+    if not declared and (not _REPO.fullmatch(contract) or match[1] != contract):
+        return False
+    profile_home = _assignee_profile_home(assignee)
+    repo, number = match[1], int(match[2])
+    owner, name = repo.split("/")
+    query = (f'{{repository(owner:{json.dumps(owner)},name:{json.dumps(name)})'
+             f'{{pullRequest(number:{number}){{headRefOid state}}}}}}')
+    repository = _api("graphql", query=query, profile_home=profile_home)["data"]["repository"]
+    if repository is None:
+        return False
+    pr = repository["pullRequest"]
+    if pr.get("headRefOid") != head_sha or pr.get("state") != "OPEN":
+        return False
+    current = _api(f"repos/{repo}/pulls/{number}", profile_home=profile_home)
+    return (current.get("head", {}).get("sha") == head_sha
+            and current.get("state") == "open")
+
+
 def collect_acceptance(contract: str, published_pr: str | None,
                        assignee: str | None = None) -> dict:
     receipt = {"ok": False, "classification": "missing", "head_sha": None,
