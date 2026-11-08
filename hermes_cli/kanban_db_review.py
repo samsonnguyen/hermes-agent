@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import subprocess
 from typing import Optional
 
 import hermes_cli.kanban_db as _kb
@@ -113,3 +114,41 @@ def request_changes(
             payload.update(rejected_head_sha=rejected_head_sha, findings=findings)
         _kb._append_event(conn, task_id, "changes_requested", payload, run_id=run_id)
     return True, implementer
+
+
+def verify_re_review_publication(conn: sqlite3.Connection, task_id: str,
+                                 metadata: Optional[dict]) -> Optional[str]:
+    """Require the submitted re-review head to be the live head of its PR."""
+    changes = conn.execute(
+        "SELECT id FROM task_runs WHERE task_id = ? AND outcome = 'changes_requested' "
+        "ORDER BY id DESC LIMIT 1", (task_id,),
+    ).fetchone()
+    if changes is None:
+        return None
+    event = _kb._latest_event(conn, task_id, "changes_requested", changes["id"])
+    rejected = _kb._json_dict(_kb._row_get(event, "payload")).get("rejected_head_sha")
+    if not rejected:
+        return None
+    submitted = metadata.get("head_sha") if isinstance(metadata, dict) else None
+    submitted = str(submitted).strip().lower() if submitted is not None else None
+    if submitted is None:
+        return "re-review must include the pushed metadata.head_sha"
+    if not re.fullmatch(r"[0-9a-f]{40}", submitted):
+        return "metadata.head_sha must be a full 40-character hexadecimal commit SHA"
+    if rejected == submitted:
+        return "the pushed head_sha is unchanged from the rejected review head"
+    task = conn.execute(
+        "SELECT completion_contract, assignee FROM tasks WHERE id = ?", (task_id,),
+    ).fetchone()
+    if task is None:
+        return "task not found"
+    try:
+        from hermes_cli.kanban_pr_acceptance import verify_published_head
+
+        published = metadata.get("published_pr") if isinstance(metadata, dict) else None
+        verified = verify_published_head(task["completion_contract"], published, submitted, task["assignee"])
+    except (OSError, subprocess.SubprocessError, RuntimeError, ValueError, KeyError, TypeError, IndexError):
+        verified = False
+    if not verified:
+        return "metadata.head_sha is not verified as the current head of the task's published PR"
+    return None

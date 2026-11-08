@@ -3288,6 +3288,11 @@ def request_review(
 
     summary = redact_review_value(summary)
     metadata = redact_review_value(metadata)
+    from hermes_cli.kanban_db_review import verify_re_review_publication
+
+    error = verify_re_review_publication(conn, task_id, metadata)
+    if error:
+        return _ret(False, error)
     # Declared (metadata["artifacts"]) and prose-referenced files
     # must be durable BEFORE anything can clean the scratch workspace up: for a
     # review-bound card the reviewer's completion is the cleanup trigger.

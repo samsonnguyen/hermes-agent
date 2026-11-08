@@ -8,16 +8,22 @@ import pytest
 
 from hermes_cli import kanban_db as kb
 from hermes_cli import kanban_db_connect as kbc
+from hermes_cli import kanban_pr_acceptance as pr_acceptance
 
 
 _HEAD_V1 = "a" * 40
 _HEAD_V2 = "b" * 40
 
 
-def test_requested_fixes_bind_review_verdict_to_rejected_head_and_findings(tmp_path: Path) -> None:
+def test_requested_fixes_bind_review_verdict_to_rejected_head_and_findings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     conn = kbc.connect(tmp_path / "kanban.db")
     try:
-        task_id = kb.create_task(conn, title="Synthetic review fixture", assignee="builder")
+        task_id = kb.create_task(
+            conn, title="Synthetic review fixture", assignee="builder",
+            completion_contract="https://github.com/acme/repo/pull/7",
+        )
         author = kb.claim_task(conn, task_id, claimer="builder:1")
         assert author is not None
         assert kb.request_review(
@@ -53,11 +59,18 @@ def test_requested_fixes_bind_review_verdict_to_rejected_head_and_findings(tmp_p
 
         author_2 = kb.claim_task(conn, task_id, claimer="builder:2")
         assert author_2 is not None
+        monkeypatch.setattr(
+            "hermes_cli.kanban_pr_acceptance.verify_published_head",
+            lambda *_args: False,
+        )
         assert not kb.request_review(
             conn,
             task_id,
-            summary="No new push; same reviewed commit.",
-            metadata={"head_sha": _HEAD_V1},
+            summary="Unpublished fabricated SHA must not re-enter review.",
+            metadata={
+                "head_sha": _HEAD_V2,
+                "published_pr": "https://github.com/acme/repo/pull/7",
+            },
             expected_run_id=author_2.current_run_id,
         )
         unchanged = kb.get_task(conn, task_id)
@@ -68,6 +81,10 @@ def test_requested_fixes_bind_review_verdict_to_rejected_head_and_findings(tmp_p
         assert len(kb.list_comments(conn, task_id)) == 0
         assert len(kb.list_runs(conn, task_id)) == 3
 
+        monkeypatch.setattr(
+            "hermes_cli.kanban_pr_acceptance.verify_published_head",
+            lambda *_args: True,
+        )
         assert kb.request_review(
             conn,
             task_id,
@@ -167,3 +184,29 @@ def test_failed_verdict_event_write_rolls_back_routing_and_run_close(
         assert run.outcome is None
     finally:
         conn.close()
+
+
+def test_published_head_requires_exact_open_pr_and_stable_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_head = _HEAD_V2
+    calls: list[str] = []
+
+    def fake_api(endpoint: str, *, query: str | None = None, profile_home: str | None = None):
+        nonlocal current_head
+        calls.append(endpoint)
+        if endpoint == "graphql":
+            return {"data": {"repository": {"pullRequest": {
+                "headRefOid": _HEAD_V2, "state": "OPEN",
+            }}}}
+        assert endpoint == "repos/acme/repo/pulls/7"
+        return {"head": {"sha": current_head}, "state": "open"}
+
+    monkeypatch.setattr(pr_acceptance, "_api", fake_api)
+    url = "https://github.com/acme/repo/pull/7"
+    assert pr_acceptance.verify_published_head(url, url, _HEAD_V2)
+    current_head = _HEAD_V1
+    assert not pr_acceptance.verify_published_head(url, url, _HEAD_V2)
+    before_mismatch = len(calls)
+    assert not pr_acceptance.verify_published_head(url, "https://github.com/acme/repo/pull/8", _HEAD_V2)
+    assert len(calls) == before_mismatch  # Wrong PR URLs are rejected before API access.
