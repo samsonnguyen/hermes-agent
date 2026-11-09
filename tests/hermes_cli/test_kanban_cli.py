@@ -72,6 +72,34 @@ def test_run_slash_stats_text_includes_review_lane(kanban_home):
     assert json.loads(kc.run_slash("stats --json"))["by_status"].get("review") == 1
 
 
+def test_kanban_show_json_exposes_native_review_verdict(kanban_home):
+    head_sha = "b" * 40
+    with kbc.connect() as conn:
+        task_id = kb.create_task(conn, title="review evidence", assignee="builder")
+        implementation = kb.claim_task(conn, task_id, claimer="builder:1")
+        assert implementation is not None
+        assert kb.request_review(
+            conn, task_id, reviewer="reviewer", summary="Ready.",
+            metadata={"head_sha": head_sha},
+            expected_run_id=implementation.current_run_id,
+        )
+        review = kb.claim_review_task(conn, task_id, claimer="reviewer:1")
+        assert review is not None
+        assert kb.complete_task(
+            conn, task_id, summary="Approved.", expected_run_id=review.current_run_id,
+        )
+
+    payload = json.loads(kc.run_slash(f"show {task_id} --json"))
+    verdicts = payload["review_verdicts"]
+    assert len(verdicts) == 1
+    assert verdicts[0]["outcome"] == "APPROVED"
+    assert verdicts[0]["head_sha"] == head_sha
+    assert verdicts[0]["reviewer"] == "reviewer"
+    assert verdicts[0]["run_id"] == review.current_run_id
+    assert verdicts[0]["findings"] == []
+    assert isinstance(verdicts[0]["created_at"], int)
+
+
 def test_kanban_show_json_includes_runtime_limit(kanban_home):
     with kbc.connect() as conn:
         bounded_id = kb.create_task(

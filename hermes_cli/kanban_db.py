@@ -885,7 +885,8 @@ CREATE TABLE IF NOT EXISTS task_comments (
     body       TEXT NOT NULL,
     created_at INTEGER NOT NULL
 );
-
+-- Structured evidence is separate from discussion; one immutable verdict per task/run/head.
+CREATE TABLE IF NOT EXISTS task_review_verdicts (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, run_id INTEGER NOT NULL, outcome TEXT NOT NULL CHECK (outcome IN ('APPROVED', 'CHANGES_REQUESTED', 'AWAITING_HUMAN')), head_sha TEXT NOT NULL, reviewer TEXT NOT NULL, findings TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE (task_id, run_id, head_sha));
 CREATE TABLE IF NOT EXISTS task_events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id    TEXT NOT NULL,
@@ -2686,6 +2687,10 @@ def complete_task(
             (task_id,),
         ).fetchone()
         prior_status = trow["status"] if trow else None
+        if expected_run_id is not None and not record_native_review_verdict(
+            conn, task_id, outcome="APPROVED", expected_run_id=int(expected_run_id),
+        ):
+            return False
         # Refuse to close a LIVE worker's run without proof of ownership
         # (expected_run_id) or an explicit human override (force=True); see
         # _claim_is_live for what "live" means.
@@ -3187,6 +3192,10 @@ def block_task(
         if rekind_reason:
             payload["requested_kind"] = requested_kind
             payload["rekind_reason"] = rekind_reason
+        if kind == "needs_input" and expected_run_id is not None and not record_native_review_verdict(
+            conn, task_id, outcome="AWAITING_HUMAN", expected_run_id=int(expected_run_id),
+        ):
+            return False
         sql = f"""
                 UPDATE tasks
                    SET status        = '{new_status}',
@@ -4147,23 +4156,8 @@ def latest_summaries(conn: sqlite3.Connection, task_ids: Iterable[str]) -> dict[
     return {r["task_id"]: r["summary"] for r in rows}
 
 
-def current_run_started_ats(conn: sqlite3.Connection, task_ids: Iterable[str]) -> dict[str, int]:
-    """``{task_id: started_at of the run ``tasks.current_run_id`` points at}``
-    in one query; tasks with no active run (NULL or dangling pointer) are omitted."""
-    ids = list(task_ids)
-    if not ids:
-        return {}
-    placeholders = ",".join("?" for _ in ids)
-    rows = conn.execute(
-        "SELECT t.id AS task_id, r.started_at AS started_at FROM tasks t "
-        "JOIN task_runs r ON r.id = t.current_run_id "
-        f"WHERE t.id IN ({placeholders})",
-        ids,
-    ).fetchall()
-    return {r["task_id"]: r["started_at"] for r in rows}
-
-
 # --- Split modules (imported at the tail: they import this module as ``_kb``) ---
+from hermes_cli.kanban_db_queries import current_run_started_ats
 from hermes_cli.kanban_db_boards import (
     _default_board_display_name,
     _dir_holds_board,
@@ -4179,6 +4173,7 @@ from hermes_cli.kanban_db_connect import (
     init_db,
     write_txn,
 )
+from hermes_cli.kanban_db_review import list_review_verdicts, record_native_review_verdict, record_review_verdict
 from hermes_cli.kanban_db_workspace import (
     _cleanup_workspace,
     _is_managed_scratch_path,

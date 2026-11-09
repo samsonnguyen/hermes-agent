@@ -45,6 +45,7 @@ def _claimed_review(
     *,
     ttl_seconds: int | None = None,
     max_runtime_seconds: int | None = None,
+    head_sha: str | None = None,
 ):
     task_id = kb.create_task(
         conn,
@@ -59,6 +60,7 @@ def _claimed_review(
         task_id,
         summary="ready for independent review",
         reviewer="reviewer",
+        metadata={"head_sha": head_sha} if head_sha is not None else None,
         expected_run_id=implementation.current_run_id,
     )
     review = kb.claim_review_task(
@@ -68,6 +70,93 @@ def _claimed_review(
     )
     assert review is not None
     return task_id, review
+
+
+def test_structured_review_verdict_is_head_bound_and_countable(conn):
+    head_sha = "a" * 40
+    task_id, review = _claimed_review(conn, "Head-bound review verdict", head_sha=head_sha)
+    run_id = review.current_run_id
+    assert run_id is not None
+
+    record = kb.record_review_verdict(
+        conn,
+        task_id,
+        outcome="APPROVED",
+        head_sha=head_sha,
+        reviewer="reviewer",
+        findings=[],
+        expected_run_id=run_id,
+    )
+
+    assert record is True
+    reviews = kb.list_review_verdicts(conn, task_id)
+    assert len(reviews) == 1
+    assert reviews[0]["outcome"] == "APPROVED"
+    assert reviews[0]["head_sha"] == head_sha
+    assert reviews[0]["reviewer"] == "reviewer"
+    assert reviews[0]["run_id"] == review.current_run_id
+    assert reviews[0]["findings"] == []
+    # Retrying the identical submission is idempotent; a changed verdict for
+    # the same immutable run/head cannot overwrite the original attestation.
+    assert kb.record_review_verdict(
+        conn, task_id, outcome="APPROVED", head_sha=head_sha, reviewer="reviewer",
+        findings=[], expected_run_id=review.current_run_id,
+    )
+    assert not kb.record_review_verdict(
+        conn, task_id, outcome="CHANGES_REQUESTED", head_sha=head_sha, reviewer="reviewer",
+        findings=[{"code": "R1", "message": "synthetic finding"}],
+        expected_run_id=review.current_run_id,
+    )
+    assert len(kb.list_review_verdicts(conn, task_id)) == 1
+
+
+@pytest.mark.parametrize("head_sha", ["a" * 39, "a" * 41, "g" * 40])
+def test_structured_review_rejects_non_full_git_sha(conn, head_sha):
+    task_id, review = _claimed_review(conn, "Reject malformed head")
+    assert not kb.record_review_verdict(
+        conn, task_id, outcome="APPROVED", head_sha=head_sha, reviewer="reviewer",
+        findings=[], expected_run_id=review.current_run_id,
+    )
+    assert kb.list_review_verdicts(conn, task_id) == []
+
+
+def test_structured_review_rejects_stale_run(conn):
+    task_id, review = _claimed_review(conn, "Reject stale review run")
+    assert kb.request_changes(
+        conn, task_id, reason="Synthetic requested change.", expected_run_id=review.current_run_id,
+    ) == (True, "builder")
+    assert review.current_run_id is not None
+    assert not kb.record_review_verdict(
+        conn, task_id, outcome="APPROVED", head_sha="b" * 40, reviewer="reviewer",
+        findings=[], expected_run_id=review.current_run_id,
+    )
+    assert kb.list_review_verdicts(conn, task_id) == []
+
+
+def test_structured_review_rejects_approval_from_implementation_run(conn):
+    task_id = kb.create_task(conn, title="Reject self approval", assignee="builder")
+    implementation = kb.claim_task(conn, task_id, claimer="builder:self")
+    assert implementation is not None
+    assert implementation.current_run_id is not None
+
+    assert not kb.record_review_verdict(
+        conn, task_id, outcome="APPROVED", head_sha="a" * 40, reviewer="builder",
+        findings=[], expected_run_id=implementation.current_run_id,
+    )
+    assert kb.list_review_verdicts(conn, task_id) == []
+
+
+def test_structured_review_rejects_head_not_in_review_handoff(conn):
+    task_id, review = _claimed_review(
+        conn, "Reject caller-selected review head", head_sha="a" * 40,
+    )
+    assert review.current_run_id is not None
+
+    assert not kb.record_review_verdict(
+        conn, task_id, outcome="APPROVED", head_sha="b" * 40, reviewer="reviewer",
+        findings=[], expected_run_id=review.current_run_id,
+    )
+    assert kb.list_review_verdicts(conn, task_id) == []
 
 
 def test_same_card_review_supports_changes_and_approval_without_block_loop(conn):
@@ -149,6 +238,56 @@ def test_same_card_review_supports_changes_and_approval_without_block_loop(conn)
     assert completed is not None
     assert completed.status == "done"
     assert completed.block_recurrences == 0
+
+
+@pytest.mark.parametrize("verdict", ["APPROVED", "CHANGES_REQUESTED", "AWAITING_HUMAN"])
+def test_native_review_lifecycle_persists_structured_verdict(conn, verdict):
+    """Every native reviewer outcome is queryable as head-bound evidence."""
+    head_sha = "a" * 40
+    task_id = kb.create_task(conn, title="Persist native verdict", assignee="builder")
+    implementation = kb.claim_task(conn, task_id, claimer="builder:1")
+    assert implementation is not None
+    assert kb.request_review(
+        conn,
+        task_id,
+        reviewer="reviewer",
+        summary="Ready for review.",
+        metadata={"head_sha": head_sha},
+        expected_run_id=implementation.current_run_id,
+    )
+    review = kb.claim_review_task(conn, task_id, claimer="reviewer:1")
+    assert review is not None
+    handoff_run = _run(kb.list_runs(conn, task_id), "review_requested")
+    assert handoff_run.metadata == {"head_sha": head_sha}
+
+    if verdict == "APPROVED":
+        assert kb.complete_task(
+            conn, task_id, summary="Approved.", expected_run_id=review.current_run_id,
+        )
+    elif verdict == "CHANGES_REQUESTED":
+        assert kb.request_changes(
+            conn,
+            task_id,
+            reason="Correct the regression.",
+            rejected_head_sha=head_sha,
+            findings=["Add a regression test."],
+            expected_run_id=review.current_run_id,
+        ) == (True, "builder")
+    else:
+        assert kb.block_task(
+            conn,
+            task_id,
+            reason="Needs human adjudication.",
+            kind="needs_input",
+            expected_run_id=review.current_run_id,
+        )
+
+    evidence = kb.list_review_verdicts(conn, task_id)
+    assert len(evidence) == 1
+    assert evidence[0]["outcome"] == verdict
+    assert evidence[0]["head_sha"] == head_sha
+    assert evidence[0]["reviewer"] == "reviewer"
+    assert evidence[0]["run_id"] == review.current_run_id
 
 
 @pytest.mark.parametrize("bad_payload", [None, "{not-json", "{}"])
