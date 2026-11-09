@@ -24,7 +24,7 @@ def record_review_verdict(conn: sqlite3.Connection, task_id: str, *, outcome: st
     if not isinstance(reviewer, str) or not reviewer.strip() or not isinstance(findings, list):
         return False
     serialized = json.dumps(findings, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    with _kb.write_txn(conn):
+    with _kb.write_txn(conn, allow_nested=True):
         task = conn.execute(
             "SELECT status, assignee, current_run_id FROM tasks WHERE id = ?", (task_id,)
         ).fetchone()
@@ -34,7 +34,7 @@ def record_review_verdict(conn: sqlite3.Connection, task_id: str, *, outcome: st
         ).fetchone()
         if (task is None or run is None or task["status"] != "running"
                 or task["current_run_id"] != expected_run_id
-                or run["status"] != "running" or task["assignee"] != reviewer
+                or run["status"] != "running"
                 or run["profile"] != reviewer):
             return False
 
@@ -80,6 +80,41 @@ def record_review_verdict(conn: sqlite3.Connection, task_id: str, *, outcome: st
             (task_id, expected_run_id, outcome, head_sha, reviewer, serialized, int(time.time())),
         )
     return True
+
+
+def record_native_review_verdict(
+    conn: sqlite3.Connection, task_id: str, *, outcome: str,
+    expected_run_id: int, findings: Optional[list[Any]] = None,
+) -> bool:
+    """Persist a head-bound verdict at a native review lifecycle boundary.
+
+    Cards without a head-bound handoff retain legacy lifecycle behavior but do
+    not claim structured, commit-specific evidence.
+    """
+    claimed = _kb._latest_event(conn, task_id, "claimed", expected_run_id)
+    claimed_from = _kb._json_dict(_kb._row_get(claimed, "payload")).get("source_status")
+    if claimed_from != "review":
+        return True
+    requested = _kb._latest_event(conn, task_id, "review_requested")
+    if requested is None:
+        return True
+    request_run = conn.execute(
+        "SELECT metadata FROM task_runs WHERE id = ?", (requested["run_id"],)
+    ).fetchone()
+    metadata = _kb._json_dict(_kb._row_get(request_run, "metadata"))
+    head_sha = metadata.get("head_sha")
+    if head_sha is None:
+        return True
+    reviewer_run = conn.execute(
+        "SELECT profile FROM task_runs WHERE id = ?", (expected_run_id,)
+    ).fetchone()
+    reviewer = _kb._nonblank_str(reviewer_run["profile"] if reviewer_run else None)
+    if reviewer is None:
+        return False
+    return record_review_verdict(
+        conn, task_id, outcome=outcome, head_sha=head_sha, reviewer=reviewer,
+        findings=findings or [], expected_run_id=expected_run_id,
+    )
 
 
 def list_review_verdicts(conn: sqlite3.Connection, task_id: str) -> list[dict[str, Any]]:
@@ -170,6 +205,11 @@ def request_changes(
         )
         if reviewer is None:
             return False, "active review run has no valid reviewer provenance"
+        if not record_native_review_verdict(
+            conn, task_id, outcome="CHANGES_REQUESTED",
+            expected_run_id=int(current_run_id), findings=findings or [],
+        ):
+            return False, "could not persist the head-bound review verdict"
 
         new_status = _kb._landing_status_after_parents(conn, task_id)
         # Review is not evidence that the failure pathology cleared.

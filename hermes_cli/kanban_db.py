@@ -2687,6 +2687,10 @@ def complete_task(
             (task_id,),
         ).fetchone()
         prior_status = trow["status"] if trow else None
+        if expected_run_id is not None and not record_native_review_verdict(
+            conn, task_id, outcome="APPROVED", expected_run_id=int(expected_run_id),
+        ):
+            return False
         # Refuse to close a LIVE worker's run without proof of ownership
         # (expected_run_id) or an explicit human override (force=True); see
         # _claim_is_live for what "live" means.
@@ -3188,6 +3192,10 @@ def block_task(
         if rekind_reason:
             payload["requested_kind"] = requested_kind
             payload["rekind_reason"] = rekind_reason
+        if kind == "needs_input" and expected_run_id is not None and not record_native_review_verdict(
+            conn, task_id, outcome="AWAITING_HUMAN", expected_run_id=int(expected_run_id),
+        ):
+            return False
         sql = f"""
                 UPDATE tasks
                    SET status        = '{new_status}',
@@ -4165,7 +4173,7 @@ from hermes_cli.kanban_db_connect import (
     init_db,
     write_txn,
 )
-from hermes_cli.kanban_db_review import list_review_verdicts, record_review_verdict
+from hermes_cli.kanban_db_review import list_review_verdicts, record_native_review_verdict, record_review_verdict
 from hermes_cli.kanban_db_workspace import (
     _cleanup_workspace,
     _is_managed_scratch_path,

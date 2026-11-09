@@ -240,6 +240,56 @@ def test_same_card_review_supports_changes_and_approval_without_block_loop(conn)
     assert completed.block_recurrences == 0
 
 
+@pytest.mark.parametrize("verdict", ["APPROVED", "CHANGES_REQUESTED", "AWAITING_HUMAN"])
+def test_native_review_lifecycle_persists_structured_verdict(conn, verdict):
+    """Every native reviewer outcome is queryable as head-bound evidence."""
+    head_sha = "a" * 40
+    task_id = kb.create_task(conn, title="Persist native verdict", assignee="builder")
+    implementation = kb.claim_task(conn, task_id, claimer="builder:1")
+    assert implementation is not None
+    assert kb.request_review(
+        conn,
+        task_id,
+        reviewer="reviewer",
+        summary="Ready for review.",
+        metadata={"head_sha": head_sha},
+        expected_run_id=implementation.current_run_id,
+    )
+    review = kb.claim_review_task(conn, task_id, claimer="reviewer:1")
+    assert review is not None
+    handoff_run = _run(kb.list_runs(conn, task_id), "review_requested")
+    assert handoff_run.metadata == {"head_sha": head_sha}
+
+    if verdict == "APPROVED":
+        assert kb.complete_task(
+            conn, task_id, summary="Approved.", expected_run_id=review.current_run_id,
+        )
+    elif verdict == "CHANGES_REQUESTED":
+        assert kb.request_changes(
+            conn,
+            task_id,
+            reason="Correct the regression.",
+            rejected_head_sha=head_sha,
+            findings=["Add a regression test."],
+            expected_run_id=review.current_run_id,
+        ) == (True, "builder")
+    else:
+        assert kb.block_task(
+            conn,
+            task_id,
+            reason="Needs human adjudication.",
+            kind="needs_input",
+            expected_run_id=review.current_run_id,
+        )
+
+    evidence = kb.list_review_verdicts(conn, task_id)
+    assert len(evidence) == 1
+    assert evidence[0]["outcome"] == verdict
+    assert evidence[0]["head_sha"] == head_sha
+    assert evidence[0]["reviewer"] == "reviewer"
+    assert evidence[0]["run_id"] == review.current_run_id
+
+
 @pytest.mark.parametrize("bad_payload", [None, "{not-json", "{}"])
 def test_rereview_requires_explicit_reviewer_when_provenance_is_invalid(
     conn,
