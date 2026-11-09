@@ -215,6 +215,8 @@ _SPECS = [
              help="Turn budget for --goal workers (default 20). Ignored without --goal."),
         _arg("--execution-mode", choices=("worker", "coordinator_managed"), default="worker",
              help="Execution owner; coordinator_managed tasks are never ordinary worker-dispatched."),
+        _arg("--risk-profile", choices=("low", "normal", "high"),
+             help="Required-check profile (sensitive or ambiguous work is raised to high)."),
         _arg("--initial-status", choices=sorted(kb.VALID_INITIAL_STATUSES), default="running",
              help="Initial card status. Use 'blocked' for cards "
                   "that require immediate human ops (R3 gate) "

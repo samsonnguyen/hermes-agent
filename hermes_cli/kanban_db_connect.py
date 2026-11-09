@@ -844,6 +844,8 @@ _EARLY_TASK_COLUMNS = (
     ("branch_name", "branch_name TEXT"),
     ("project_id", "project_id TEXT"),
     ("idempotency_key", "idempotency_key TEXT"),
+    ("risk_profile", "risk_profile TEXT NOT NULL DEFAULT 'high'"),
+    ("risk_checks", "risk_checks TEXT NOT NULL DEFAULT '[]'"),
 )
 
 # (new column, ddl, legacy source column, copy statement) — see the
@@ -879,6 +881,8 @@ _LATER_TASK_COLUMNS = (
     # Ralph-style goal loop toggle; 0 = classic single-shot worker.
     ("goal_mode", "goal_mode INTEGER NOT NULL DEFAULT 0"),
     ("goal_max_turns", "goal_max_turns INTEGER"),
+    ("risk_profile", "risk_profile TEXT NOT NULL DEFAULT 'high'"),
+    ("risk_checks", "risk_checks TEXT NOT NULL DEFAULT '[]'"),
     ("completion_contract", "completion_contract TEXT"),
     ("session_id", "session_id TEXT"),
     # Typed block reason (VALID_BLOCK_KINDS); NULL = generic human blocker.
