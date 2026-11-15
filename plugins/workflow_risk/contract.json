@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract_version": "1.0.0",
+  "mode": "ADVISORY",
+  "enforcement": "NONE",
+  "profiles": {
+    "low": ["changed_package_tests", "lint", "vivi_review"],
+    "normal": ["changed_package_tests", "contract_tests", "synthetic_merge_check", "vivi_review"],
+    "high": ["design_contract", "real_postgres_if_relevant", "migration_release_gates", "vivi_review"]
+  },
+  "risk_fields": ["contract_version", "mode", "profile", "requested_profile", "inferred_profile", "paths", "required_checks", "enforcement"],
+  "doctor_fields": ["contract_version", "mode", "profile", "status", "enforcement", "evidence"],
+  "evidence_statuses": ["OBSERVED", "MISSING", "UNAVAILABLE"],
+  "receipt_fields": ["contract_version", "source", "read_only", "checks"],
+  "receipt_source": "synthetic"
+}
