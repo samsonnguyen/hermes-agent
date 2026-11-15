@@ -135,9 +135,9 @@ def verify_published_head(contract: str, published_pr: str | None, head_sha: str
 
 
 def collect_acceptance(contract: str, published_pr: str | None,
-                       assignee: str | None = None) -> dict:
+                       assignee: str | None = None, reviewed_sha: str | None = None) -> dict:
     receipt = {"ok": False, "classification": "missing", "head_sha": None,
-               "pr_url": published_pr, "checks": [],
+               "merge_sha": None, "reviewed_sha": reviewed_sha, "pr_url": published_pr, "checks": [],
                "recovery": "Fix required failures, rerun infrastructure checks or wait, then retry completion. "
                            "Use kanban_block if human input is needed; receipts remain on the task event log."}
     try:
@@ -151,7 +151,10 @@ def collect_acceptance(contract: str, published_pr: str | None,
         repo, number = match[1], int(match[2])
         receipt["pr_url"] = url
         owner, name = repo.split("/")
-        query = f'{{repository(owner:{json.dumps(owner)},name:{json.dumps(name)}){{pullRequest(number:{number:d}){{headRefOid baseRefName state\n            baseRef{{branchProtectionRule{{requiredStatusChecks{{context app{{databaseId}}}}}}}}}}}}}}'
+        if not isinstance(reviewed_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", reviewed_sha):
+            receipt["detail"] = "A head-bound APPROVED review artifact is required before PR completion."
+            return receipt
+        query = f'{{repository(owner:{json.dumps(owner)},name:{json.dumps(name)}){{pullRequest(number:{number:d}){{headRefOid baseRefName state merged mergeCommit{{oid}} baseRef{{branchProtectionRule{{requiredStatusChecks{{context app{{databaseId}}}}}}}}}}}}}}'
         repository = _api("graphql", query=query, profile_home=profile_home)["data"]["repository"]
         if repository is None:
             # A private repo the login cannot read resolves to null, not an error.
@@ -159,8 +162,18 @@ def collect_acceptance(contract: str, published_pr: str | None,
         pr = repository["pullRequest"]
         sha, branch = pr["headRefOid"], pr["baseRefName"]
         receipt["head_sha"] = sha
-        if not re.fullmatch(r"[0-9a-f]{40}", sha) or pr["state"] not in {"OPEN", "MERGED"}:
-            raise ValueError("PR is closed or current head is unavailable")
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise ValueError("PR head is unavailable")
+        if sha != reviewed_sha:
+            receipt.update(classification="stale", detail="PR head differs from the head-bound reviewed SHA.")
+            return receipt
+        if pr.get("state") != "MERGED" or pr.get("merged") is not True:
+            receipt.update(classification="pending", detail="Canonical PR is not merged; completion remains nonterminal.")
+            return receipt
+        merge_sha = (pr.get("mergeCommit") or {}).get("oid")
+        if not isinstance(merge_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", merge_sha):
+            raise ValueError("PR merge SHA is unavailable")
+        receipt["merge_sha"] = merge_sha
         protection = (pr.get("baseRef") or {}).get("branchProtectionRule") or {}
         required = {(r["context"], (r.get("app") or {}).get("databaseId")) for r in protection.get("requiredStatusChecks", [])}
         rules = _api(f"repos/{repo}/rules/branches/{quote(branch, safe='')}?per_page=100",
@@ -174,12 +187,12 @@ def collect_acceptance(contract: str, published_pr: str | None,
         if not required:
             receipt["detail"] = "No repository-required checks are configured; explicitly use a local-only contract for non-CI tasks."
             return receipt
-        pages = _api(f"repos/{repo}/commits/{sha}/check-runs?per_page=100&filter=latest",
+        pages = _api(f"repos/{repo}/commits/{merge_sha}/check-runs?per_page=100&filter=latest",
                      paginate=True, profile_home=profile_home)
         runs = [run for page in pages for run in page["check_runs"]]
         if len({r["id"] for r in runs}) != pages[0]["total_count"]:
             raise ValueError("Incomplete check-run pagination")
-        statuses = [{**s, "sha": sha} for page in _api(f"repos/{repo}/commits/{sha}/statuses?per_page=100",
+        statuses = [{**s, "sha": merge_sha} for page in _api(f"repos/{repo}/commits/{merge_sha}/statuses?per_page=100",
                                                        paginate=True, profile_home=profile_home) for s in page]
         outcomes = []
         for context, app_id in sorted(required, key=str):
@@ -194,7 +207,7 @@ def collect_acceptance(contract: str, published_pr: str | None,
             for check in selected:
                 is_run = "conclusion" in check
                 outcome = check.get("conclusion") if is_run else check["state"]
-                classification = _classify(check, sha, outcome, is_run)
+                classification = _classify(check, merge_sha, outcome, is_run)
                 outcomes.append(classification)
                 receipt["checks"].append({"name": context, "id": check["id"],
                     "url": check.get("html_url") or check.get("target_url"),
@@ -202,8 +215,10 @@ def collect_acceptance(contract: str, published_pr: str | None,
                     "classification": classification, "conclusion": outcome})
         # Re-read after all pages: old-head successes are never transferable.
         current = _api(f"repos/{repo}/pulls/{number}", profile_home=profile_home)
-        if current["head"]["sha"] != sha or current["base"]["ref"] != branch or (current["state"] == "closed" and not current.get("merged")):
-            receipt.update(classification="stale", detail="PR head/base changed while collecting evidence; retry.")
+        if (current["head"]["sha"] != sha or current["base"]["ref"] != branch
+                or current.get("state") != "closed" or current.get("merged") is not True
+                or current.get("merge_commit_sha") != merge_sha):
+            receipt.update(classification="stale", detail="PR state/head/base/merge changed while collecting evidence; retry.")
             return receipt
         receipt["classification"] = next((x for x in outcomes if x != "success"), "missing" if not outcomes else "success")
         receipt["ok"] = receipt["classification"] == "success"

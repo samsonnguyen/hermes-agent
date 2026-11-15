@@ -15,7 +15,11 @@ def prepare_acceptance(conn, task_id, expected_run_id, metadata):
     if snapshot is None:
         return False
     run_id, status, contract = snapshot
-    if not contract or contract == "local-only":
+    if isinstance(metadata, dict) and metadata.get("completion_reason") == "awaiting_human":
+        return False
+    if not isinstance(contract, str):
+        return None
+    if contract == "local-only":
         return None
     if status not in {"running", "ready", "blocked", "review"} or (expected_run_id is not None and run_id != expected_run_id):
         return False
@@ -29,10 +33,16 @@ def prepare_acceptance(conn, task_id, expected_run_id, metadata):
             conn.execute("UPDATE tasks SET completion_contract=? WHERE id=?", (published_pr, task_id))
         snapshot = (run_id, status, published_pr)
         contract = published_pr
+    reviewed = conn.execute(
+        "SELECT outcome, head_sha FROM task_review_verdicts WHERE task_id=? ORDER BY id DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    reviewed_sha = (reviewed["head_sha"] if reviewed and reviewed["outcome"] == "APPROVED" else None)
     # The assignee profile's gh login owns the repo: acceptance must not run as
     # the ambient login of whichever process completes the card (#122689).
     assignee = conn.execute("SELECT assignee FROM tasks WHERE id=?", (task_id,)).fetchone()["assignee"]
-    return snapshot, collect_acceptance(contract, published_pr, assignee=assignee)
+    return snapshot, collect_acceptance(contract, published_pr, assignee=assignee,
+                                        reviewed_sha=reviewed_sha)
 
 
 def record_acceptance(conn, task_id, acceptance):
