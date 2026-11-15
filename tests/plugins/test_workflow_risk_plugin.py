@@ -80,6 +80,10 @@ def test_sensitive_filename_stems_cannot_be_downgraded_by_low_request():
         "plugins/migrations.py",
         "plugins/rbac.py",
         "docs/auth.py",
+        "docs/deployment.md",
+        "tests/deployment.yaml",
+        "docs/deployments.md",
+        "plugins/deployment.py",
     )
 
     for path in paths:
