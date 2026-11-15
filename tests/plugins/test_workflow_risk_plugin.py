@@ -58,6 +58,23 @@ def test_low_normal_high_profiles_include_required_check_labels():
     assert "migration_release_gates" in high["required_checks"]
 
 
+def test_sensitive_filename_stems_cannot_be_downgraded_by_low_request():
+    paths = (
+        "gateway/auth.py",
+        "plugins/auth.py",
+        "plugins/migrations.py",
+        "plugins/rbac.py",
+        "docs/auth.py",
+    )
+
+    for path in paths:
+        result = policy.evaluate(paths=[path], requested_profile="low")
+
+        assert result["profile"] == "high", path
+        assert "migration_release_gates" in result["required_checks"], path
+        assert "real_postgres_if_relevant" in result["required_checks"], path
+
+
 def test_receipt_validator_rejects_non_synthetic_or_mutable_evidence():
     validated = policy.validate_receipt(
         {
