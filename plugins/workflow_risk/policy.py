@@ -17,8 +17,8 @@ _REQUIRED_CHECKS = _CONTRACT["profiles"]
 _LOW_ROOTS = ("docs/", "plans/", "tests/", "website/", "ui-tui/", "apps/desktop/")
 _NORMAL_ROOTS = ("agent/", "gateway/", "tools/", "hermes_cli/", "plugins/", "skills/", "web/")
 _SENSITIVE = re.compile(
-    r"(^|/)(migrations?|alembic|auth|authentication|rbac|deploy|flux|zitadel|billing|payments?|money)(/|$)|"
-    r"(^|/)(migration|deploy|auth|rbac|billing|payment)[-_]",
+    r"(^|/)(migrations?|alembic|auth|authentication|rbac|deploy|flux|zitadel|billing|payments?|money)"
+    r"(\.[^/]+|[-_][^/]*|/|$)",
     re.IGNORECASE,
 )
 
