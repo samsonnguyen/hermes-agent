@@ -47,7 +47,12 @@ def evaluate(paths: Sequence[str], requested_profile: str | None = None) -> dict
         inferred = "high"
     else:
         inferred = "high" if not paths else max((_classify_path(p) for p in paths), key=_PROFILE_RANK.__getitem__)
-    request = requested_profile if requested_profile in _PROFILE_RANK else "high"
+    if requested_profile is None:
+        request = inferred
+    elif isinstance(requested_profile, str) and requested_profile in _PROFILE_RANK:
+        request = requested_profile
+    else:
+        request = "high"
     profile = max((inferred, request), key=_PROFILE_RANK.__getitem__)
     return {
         "contract_version": CONTRACT_VERSION,

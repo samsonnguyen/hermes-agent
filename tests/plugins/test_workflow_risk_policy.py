@@ -15,3 +15,12 @@ def test_sensitive_filename_stems_are_high_anywhere_and_require_high_checks():
         result = evaluate([path], requested_profile="low")
         assert result["profile"] == "high"
         assert result["required_checks"] == high_checks
+
+
+def test_omitted_profile_preserves_inferred_low_and_normal_profiles():
+    assert evaluate(["docs/design.md"])["profile"] == "low"
+    assert evaluate(["gateway/adapter.py"])["profile"] == "normal"
+
+
+def test_invalid_requested_profile_fails_closed_to_high():
+    assert evaluate(["docs/design.md"], "unknown")["profile"] == "high"

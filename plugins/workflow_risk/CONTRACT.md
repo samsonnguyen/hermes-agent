@@ -9,8 +9,10 @@ manifest/API versions. `contract.json` is the machine-readable export; `policy.p
 `requested_profile`, `inferred_profile`, `paths`, `required_checks`, and `enforcement`.
 Profiles are ordered `low < normal < high`. A known sensitive path or any unknown/ambiguous path
 classifies as `high`; mixed paths choose the highest class. An empty path set is unknown and high.
-A user request can raise risk, never lower it. In particular, a requested low profile cannot
-remove migration, auth, money, RBAC, or deployment checks.
+When `requested_profile` is omitted, the effective profile is the inferred profile. A valid
+explicit request can raise risk, never lower it; an invalid supplied value fails closed to `high`.
+In particular, a requested low profile cannot remove migration, auth, money, RBAC, or deployment
+checks.
 
 The profile check lists are contract data: low = changed-package tests, lint, Vivi review;
 normal adds contract tests and synthetic merge check; high requires design/contract, relevant real
@@ -30,10 +32,17 @@ as schema validation, not proof that any check actually ran.
 
 ## Hermes compatibility and limits
 
-The native package uses `plugin.yaml` plus `register(ctx)` and only the public additive
-`register_cli_command` interface. Its declared compatibility floor is Hermes v0.23.0. Validate a
-checkout with `hermes plugins validate <package>` and `hermes plugins doctor <package> --ci`;
-`hermes plugins capabilities` is an independent host capability readout, not plugin behavior proof.
+The general Hermes plugin API does not provide an in-process-only CLI registration override. Hermes
+v0.23.x intentionally skips `ctx.register_cli_command()` when `plugins.isolation: host`; therefore
+`hermes workflow` is unavailable in host mode, even though the plugin itself is host-compatible. The
+`hermes plugins validate` isolation audit reports this skipped registration.
+
+To use the `workflow` CLI, configure `plugins.isolation: in_process` for the profile and restart the
+Hermes process so it loads the plugin under that mode. This makes third-party plugin code execute
+inside the Hermes process (rather than the per-profile plugin host), reducing crash and process
+isolation; do not change a centrally pinned `host` setting to obtain this command. Under host mode,
+consumers may use the documented pure policy contract through an explicitly supported integration,
+but must not claim the CLI is available.
 
 **ADVISORY, NON-ENFORCING:** this plugin neither observes nor intercepts Kanban mutation paths.
 It does not enforce risk policy, veto transitions, or close the native-core transactional

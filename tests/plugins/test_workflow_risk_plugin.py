@@ -32,6 +32,21 @@ def test_plugin_registers_advisory_workflow_cli_through_public_context():
     assert "Advisory" in ctx.commands[0]["help"]
 
 
+def test_hermes_host_audit_reports_cli_unavailable_and_in_process_requirement():
+    from pathlib import Path
+
+    from hermes_cli.plugin_isolation import isolation_mode
+    from hermes_cli.plugin_isolation_audit import audit_plugin_dir
+
+    plugin_dir = Path(__file__).parents[2] / "plugins" / "workflow_risk"
+    report = audit_plugin_dir(plugin_dir)
+
+    assert isolation_mode({"plugins": {"isolation": "in_process"}}) == "in_process"
+    assert isolation_mode({"plugins": {"isolation": "host"}}) == "host"
+    assert report.verdict == "host"
+    assert any("ctx.register_cli_command() is skipped in the host" in note for note in report.notes)
+
+
 def test_empty_paths_and_unknown_evidence_are_not_reported_as_pass():
     risk = policy.evaluate(paths=[], requested_profile=None)
     report = policy.doctor(
